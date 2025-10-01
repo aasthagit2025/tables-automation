@@ -3,47 +3,48 @@ import pandas as pd
 import io
 import re
 
-# --- Helper Function to combine counts and percentages ---
-def format_cell(count, total):
-    if total == 0:
-        return "0 (0.0%)"
-    percentage = (count / total) * 100
-    return f"{int(count)} ({percentage:.1f}%)"
+# ... (format_cell function remains the same) ...
 
 # --- Main App Function ---
 def run_app():
-    st.set_page_config(page_title="Advanced Table Automation", layout="wide")
-    st.title("📊 Advanced Market Research Table Automation")
-    st.write("This version is designed to read multi-sheet Excel files and map value labels to raw data before creating tables.")
-
-    # --- File Uploaders ---
-    st.sidebar.header("1. Upload Your Files")
-    raw_data_file = st.sidebar.file_uploader("Upload Raw Data (XLSX)", type=["xlsx"])
-    banner_file = st.sidebar.file_uploader("Upload Banner Cuts (XLSX)", type=["xlsx"])
+    # ... (st.set_page_config, st.title, st.write, st.sidebar.header, file_uploader remain the same) ...
 
     if raw_data_file and banner_file:
         try:
             # --- Load All Necessary Data Sheets ---
+            # NOTE: If the user uploads CSV files, this will read the CSV content.
             df_raw = pd.read_excel(raw_data_file, sheet_name="Raw Data")
             df_val_labels = pd.read_excel(raw_data_file, sheet_name="Val labels", header=1)
             df_banners = pd.read_excel(banner_file, sheet_name="Banners", header=1)
 
-            # --- FIX: Ensure Correct Column Names for Val Labels ---
+            # --- CRITICAL FIX: Ensure Correct Column Names for Val Labels ---
+            # Use positional index [0] to get the column containing the variable names.
+            # This is robust against 'Variable Values' being read as 'Unnamed: 0' in CSVs.
             if len(df_val_labels.columns) >= 3:
-                # Rename columns based on the multi-row header structure
-                df_val_labels.columns = ['Variable Values', 'Value', 'Label']
+                # Assuming the structure is: [Variable Name Column], [Value Column], [Label Column]
+                df_val_labels.rename(columns={
+                    df_val_labels.columns[0]: 'Variable Values', # This handles the 'Unnamed: 0' or 'Val labels' issue
+                    df_val_labels.columns[1]: 'Value',
+                    df_val_labels.columns[2]: 'Label'
+                }, inplace=True)
             else:
                 st.error("The 'Val labels' sheet does not have the expected 3 columns. Check your file structure.")
                 return 
             
             # --- Data Pre-processing: Apply Value Labels to Raw Data ---
             df_labeled = df_raw.copy()
+            # Forward fill the 'Variable Values' column
             df_val_labels['Variable Values'] = df_val_labels['Variable Values'].ffill()
 
             for var_name in df_val_labels['Variable Values'].unique():
-                if var_name in df_labeled.columns:
+                # Ensure var_name is a string before checking membership
+                if isinstance(var_name, str) and var_name in df_labeled.columns:
+                    # Create a mapping dictionary for the current variable
                     mapping = df_val_labels[df_val_labels['Variable Values'] == var_name].set_index('Value')['Label'].to_dict()
+                    # Apply the mapping to the raw data
                     df_labeled[var_name] = df_raw[var_name].map(mapping).fillna(df_raw[var_name])
+
+            # ... (Sections 2 and 3 remain the same, including the sheet name sanitization fix from before) ...
 
             st.sidebar.header("2. Select Questions")
             all_columns = df_labeled.columns.tolist()
@@ -61,11 +62,11 @@ def run_app():
                         output_buffer = io.BytesIO()
                         with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
                             for question in questions_to_tabulate:
-                                # Start with the Total column for the current question
                                 total_counts = df_labeled[question].value_counts().sort_index()
                                 grand_total = total_counts.sum()
                                 
-                                final_table = pd.DataFrame(index=total_counts.index)
+                                # Use .astype(str) for the index to prevent potential non-string issues
+                                final_table = pd.DataFrame(index=total_counts.index.astype(str))
                                 final_table['Total'] = total_counts.apply(lambda x: format_cell(x, grand_total))
                                 
                                 # Process each banner defined in the banner file
@@ -83,17 +84,13 @@ def run_app():
 
                                 final_table = final_table.fillna("0 (0.0%)")
                                 
-                                # --- CRITICAL FIX: Sanitize Sheet Name More Thoroughly ---
-                                # Remove all invalid Excel sheet characters: \ / * [ ] : ?
-                                # The re.sub function will replace all occurrences of these characters with an empty string.
+                                # Sheet Name Sanitization (using replacement for safety)
                                 invalid_chars = r'[\\/*?\[\]:]'
-                                sheet_name = re.sub(invalid_chars, '', question)
-                                sheet_name = sheet_name[:31].strip() # Truncate to 31 chars and remove leading/trailing whitespace
+                                sheet_name = re.sub(invalid_chars, '_', question)
+                                sheet_name = sheet_name[:31].strip() 
                                 
-                                # Handle case where sanitization leaves an empty or invalid name
                                 if not sheet_name:
                                     sheet_name = f"Table_{questions_to_tabulate.index(question) + 1}"
-                                # --------------------------------------------------------
 
                                 final_table.to_excel(writer, sheet_name=sheet_name)
 
