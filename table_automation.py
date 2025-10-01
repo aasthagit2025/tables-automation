@@ -20,7 +20,6 @@ def run_app():
     # --- File Uploaders ---
     st.sidebar.header("1. Upload Your Files")
     
-    # Define file uploaders
     raw_data_file = st.sidebar.file_uploader("Upload Raw Data (XLSX)", type=["xlsx"])
     banner_file = st.sidebar.file_uploader("Upload Banner Cuts (XLSX)", type=["xlsx"])
 
@@ -32,14 +31,13 @@ def run_app():
     # --- Data Processing Logic ---
     try:
         # Load All Necessary Data Sheets
-        # Header=1 is used for Val labels and Banners to skip the first row (multi-row header)
         df_raw = pd.read_excel(raw_data_file, sheet_name="Raw Data")
         df_val_labels = pd.read_excel(raw_data_file, sheet_name="Val labels", header=1)
         df_banners = pd.read_excel(banner_file, sheet_name="Banners", header=1)
 
-        # --- FIX 1: Robust Column Naming for Val Labels ---
+        # --- FIX 1: Robust Column Naming for Val Labels (Handles 'Unnamed' columns) ---
         if len(df_val_labels.columns) >= 3:
-            # Rename columns using positional indexing, which is highly robust against 'Unnamed' column names
+            # Use positional indexing to rename columns, which is necessary for multi-row headers
             df_val_labels.rename(columns={
                 df_val_labels.columns[0]: 'Variable Values', 
                 df_val_labels.columns[1]: 'Value',           
@@ -92,16 +90,14 @@ def run_app():
                                     banner_counts = subgroup_data[question].value_counts()
                                     banner_total = banner_counts.sum()
                                     
-                                    # Use reindex to align counts with the total table index
                                     formatted_counts = banner_counts.reindex(final_table.index, fill_value=0)
                                     final_table[banner_name] = formatted_counts.apply(lambda x: format_cell(x, banner_total))
 
                             final_table = final_table.fillna("0 (0.0%)")
                             
-                            # --- FIX 2: Robust Sheet Name Sanitization (Resolves 'At least one sheet must be visible') ---
-                            # Invalid Excel sheet characters: \ / * [ ] : ?
+                            # --- FIX 2: Sheet Name Sanitization (Crucial for 'At least one sheet must be visible') ---
+                            # Replace invalid characters with an UNDERSCORE to ensure the name is never empty.
                             invalid_chars = r'[\\/*?\[\]:]'
-                            # Replace invalid characters with an underscore '_'
                             sheet_name = re.sub(invalid_chars, '_', str(question))
                             sheet_name = sheet_name[:31].strip() 
                             
@@ -119,9 +115,7 @@ def run_app():
                     )
 
     except Exception as e:
-        # Display the actual error that occurred
         st.error(f"A critical processing error occurred: {e}")
-        # Custom message retained for user context
         st.error("Please re-check your sheet names ('Raw Data', 'Val labels', 'Banners') and column names in the Excel files.")
 
 # --- Run the App ---
