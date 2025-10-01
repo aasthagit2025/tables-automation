@@ -1,93 +1,102 @@
+import streamlit as st
 import pandas as pd
+import io
 
+# --- Helper Function (No changes needed here) ---
 def format_table(crosstab_counts, crosstab_percents):
     """
     Combines counts and percentages into a single DataFrame with the
     format 'Count (Percentage%)'.
     """
-    formatted_table = crosstab_counts.astype(str) + " (" + crosstab_percents.round(1).astype(str) + "%)"
+    # Ensure percentages are rounded before converting to string
+    crosstab_percents_rounded = crosstab_percents.round(1).astype(str)
+    formatted_table = crosstab_counts.astype(str) + " (" + crosstab_percents_rounded + "%)"
     return formatted_table
 
-def run_automation():
-    """
-    Main function to run the table automation process.
-    """
-    print("--- Market Research Table Automation ---")
+# --- Set up the Streamlit page ---
+st.set_page_config(page_title="Market Research Table Automation", layout="wide")
+st.title("📊 Market Research Table Automation")
+st.write("This app automates the creation of cross-tabulation tables from raw survey data and banner definitions.")
 
-    # --- 1. GET USER INPUTS ---
+# --- File Uploader Widgets ---
+st.sidebar.header("1. Upload Your Files")
+raw_data_file = st.sidebar.file_uploader("Upload Raw Data (XLSX)", type=["xlsx"])
+banner_file = st.sidebar.file_uploader("Upload Banner Cuts (XLSX)", type=["xlsx"])
+
+# --- Main App Logic ---
+if raw_data_file is not None and banner_file is not None:
     try:
-        raw_data_file = input("Enter the name of your raw data file (e.g., raw_data.xlsx): ")
-        banner_file = input("Enter the name of your banner cuts file (e.g., banner_cuts.xlsx): ")
-        output_file = input("Enter the desired name for your output Excel file (e.g., output_tables.xlsx): ")
-
-        # Load the data using pandas
         df_raw = pd.read_excel(raw_data_file)
         df_banners = pd.read_excel(banner_file)
-    except FileNotFoundError as e:
-        print(f"\nERROR: File not found -> {e}. Please make sure the files are in the same folder as the script.")
-        return
+
+        st.sidebar.header("2. Select Questions")
+        # Let user select which questions (columns) to tabulate
+        all_columns = df_raw.columns.tolist()
+        questions_to_tabulate = st.sidebar.multiselect(
+            "Choose questions to create tables for:",
+            options=all_columns
+        )
+
+        st.sidebar.header("3. Generate Report")
+        if st.sidebar.button("Generate Tables"):
+            if not questions_to_tabulate:
+                st.warning("Please select at least one question to tabulate.")
+            else:
+                with st.spinner('Processing tables... This may take a moment.'):
+                    # Use an in-memory buffer to store the Excel file
+                    output_buffer = io.BytesIO()
+                    
+                    with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
+                        for question in questions_to_tabulate:
+                            
+                            # --- Create 'Total' Column ---
+                            total_counts = df_raw[question].value_counts()
+                            total_percents = df_raw[question].value_counts(normalize=True) * 100
+                            final_table = pd.DataFrame({
+                                'Total_Count': total_counts,
+                                'Total_Percent': total_percents
+                            })
+                            final_table['Total'] = final_table.apply(
+                                lambda row: f"{int(row['Total_Count'])} ({row['Total_Percent']:.1f}%)", axis=1
+                            )
+                            final_table = final_table[['Total']]
+
+                            # --- Loop through each banner ---
+                            for _, row in df_banners.iterrows():
+                                banner_variable = row['BannerVariable']
+                                banner_name = row['BannerName']
+                                
+                                # Crosstab for counts and percentages
+                                crosstab_counts = pd.crosstab(df_raw[question], df_raw[banner_variable])
+                                crosstab_percents = pd.crosstab(df_raw[question], df_raw[banner_variable], normalize='columns') * 100
+                                
+                                # Format and combine
+                                formatted_banner_table = format_table(crosstab_counts, crosstab_percents)
+                                formatted_banner_table.columns = pd.MultiIndex.from_product([[banner_name], formatted_banner_table.columns])
+                                
+                                final_table = final_table.join(formatted_banner_table, how='outer')
+
+                            final_table = final_table.fillna('-')
+                            
+                            # Write the completed table to a sheet in the in-memory Excel file
+                            sheet_name = question[:31] # Excel sheet names are max 31 chars
+                            final_table.to_excel(writer, sheet_name=sheet_name)
+                    
+                    # After the loop, prepare the buffer for download
+                    output_buffer.seek(0)
+                    
+                    st.success("✅ Success! Your tables are ready for download.")
+                    
+                    # --- Download Button ---
+                    st.download_button(
+                        label="📥 Download Tables as Excel File",
+                        data=output_buffer,
+                        file_name="automated_tables.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
     except Exception as e:
-        print(f"\nAn error occurred while reading the files: {e}")
-        return
-
-    # --- 2. DEFINE QUESTIONS TO TABULATE ---
-    # List the column names from your raw data that you want to create tables for.
-    questions_to_tabulate = [
-        'Q1_Awareness',
-        'Q2_Satisfaction'
-        # Add more question columns here
-    ]
-
-    # --- 3. CREATE EXCEL WRITER TO SAVE OUTPUT ---
-    # This allows us to write multiple tables to different sheets in one file.
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        
-        # --- 4. MAIN LOOP TO GENERATE TABLES ---
-        for question in questions_to_tabulate:
-            print(f"Processing table for: {question}...")
-
-            # --- Create the 'Total' Column first ---
-            total_counts = df_raw[question].value_counts()
-            total_percents = df_raw[question].value_counts(normalize=True) * 100
-            
-            # Combine into a single formatted DataFrame
-            final_table = pd.DataFrame({
-                'Total_Count': total_counts,
-                'Total_Percent': total_percents
-            })
-            final_table['Total'] = final_table['Total_Count'].astype(str) + " (" + final_table['Total_Percent'].round(1).astype(str) + "%)"
-            final_table = final_table[['Total']] # Keep only the formatted column
-
-            # --- Loop through each banner defined in the banner_cuts file ---
-            for index, row in df_banners.iterrows():
-                banner_variable = row['BannerVariable']
-                banner_name = row['BannerName']
-
-                # Create the cross-tabulation for counts
-                crosstab_counts = pd.crosstab(df_raw[question], df_raw[banner_variable])
-                
-                # Create the cross-tabulation for column percentages
-                crosstab_percents = pd.crosstab(df_raw[question], df_raw[banner_variable], normalize='columns') * 100
-
-                # Format the table by combining counts and percentages
-                formatted_banner_table = format_table(crosstab_counts, crosstab_percents)
-                
-                # Add a header for the banner group
-                formatted_banner_table.columns = pd.MultiIndex.from_product([[banner_name], formatted_banner_table.columns])
-
-                # Join this banner's results to the main table for the question
-                final_table = final_table.join(formatted_banner_table, how='outer')
-
-            # Fill any missing values with a dash for clarity
-            final_table = final_table.fillna('-')
-
-            # --- 5. SAVE THE COMPLETED TABLE TO A SHEET ---
-            # Use the question name as the sheet name
-            final_table.to_excel(writer, sheet_name=question[:31]) # Excel sheet names have a 31-char limit
-
-    print(f"\n✅ Success! All tables have been generated and saved to '{output_file}'.")
-
-
-# --- Run the main function ---
-if __name__ == "__main__":
-    run_automation()
+        st.error(f"An error occurred: {e}")
+        st.error("Please check if your file formats are correct and column names in the banner file match the data file.")
+else:
+    st.info("Please upload both the raw data and banner cuts files to begin.")
