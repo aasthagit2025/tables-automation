@@ -30,12 +30,13 @@ def run_app():
 
     # --- Data Processing Logic ---
     try:
-        # Load All Necessary Data Sheets
+        # Load All Necessary Data Sheets (Sheet names confirmed: Raw Data, Val labels, Banners)
         df_raw = pd.read_excel(raw_data_file, sheet_name="Raw Data")
+        # Header=1 is used for Val labels and Banners to skip the first row (multi-row header)
         df_val_labels = pd.read_excel(raw_data_file, sheet_name="Val labels", header=1)
         df_banners = pd.read_excel(banner_file, sheet_name="Banners", header=1)
 
-        # --- FIX 1: Robust Column Naming for Val Labels (Handles 'Unnamed' columns) ---
+        # --- FIX 1: Robust Column Naming for Val Labels ---
         if len(df_val_labels.columns) >= 3:
             # Use positional indexing to rename columns, which is necessary for multi-row headers
             df_val_labels.rename(columns={
@@ -81,6 +82,7 @@ def run_app():
                             
                             # Process each banner
                             for _, banner_row in df_banners.iterrows():
+                                # Column names from your banner file: 'var labels', 'Val labels'
                                 var_label = banner_row['var labels']
                                 val_label = banner_row['Val labels']
                                 banner_name = val_label 
@@ -95,12 +97,15 @@ def run_app():
 
                             final_table = final_table.fillna("0 (0.0%)")
                             
-                            # --- FIX 2: Sheet Name Sanitization (Crucial for 'At least one sheet must be visible') ---
-                            # Replace invalid characters with an UNDERSCORE to ensure the name is never empty.
+                            # --- FIX 2: Sheet Name Sanitization (Resolves 'At least one sheet must be visible') ---
+                            # Invalid Excel sheet characters: \ / * [ ] : ?
                             invalid_chars = r'[\\/*?\[\]:]'
-                            sheet_name = re.sub(invalid_chars, '_', str(question))
-                            sheet_name = sheet_name[:31].strip() 
                             
+                            # CRITICAL CHANGE: Replace invalid chars with '_' instead of removing them
+                            sheet_name = re.sub(invalid_chars, '_', str(question))
+                            sheet_name = sheet_name[:31].strip() # Truncate to 31 chars
+                            
+                            # Fallback check for cases where the name is still empty
                             if not sheet_name:
                                 sheet_name = f"Table_{questions_to_tabulate.index(question) + 1}"
 
@@ -115,6 +120,7 @@ def run_app():
                     )
 
     except Exception as e:
+        # Display the actual error that occurred
         st.error(f"A critical processing error occurred: {e}")
         st.error("Please re-check your sheet names ('Raw Data', 'Val labels', 'Banners') and column names in the Excel files.")
 
