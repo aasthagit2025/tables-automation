@@ -26,8 +26,8 @@ banner_file = st.sidebar.file_uploader("Upload Banner Cuts (XLSX)", type=["xlsx"
 # --- Main App Logic ---
 if raw_data_file is not None and banner_file is not None:
     try:
-        df_raw = pd.read_excel(raw_data_file)
-        df_banners = pd.read_excel(banner_file)
+        df_raw = pd.read_excel(raw_data_file, sheet_name="Raw Data")
+        df_banners = pd.read_excel(banner_file, sheet_name="Banners")	
 
         st.sidebar.header("2. Select Questions")
         # Let user select which questions (columns) to tabulate
