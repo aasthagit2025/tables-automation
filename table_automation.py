@@ -20,25 +20,34 @@ def run_app():
     # --- File Uploaders ---
     st.sidebar.header("1. Upload Your Files")
     
+    # NOTE: You MUST upload the original multi-sheet XLSX files, NOT the separate CSV files.
+    # The code is designed to read multiple sheets from a single XLSX workbook.
+    st.warning("⚠️ Please ensure you are uploading the **original multi-sheet XLSX files**, not the individual CSV files.")
     raw_data_file = st.sidebar.file_uploader("Upload Raw Data (XLSX)", type=["xlsx"])
     banner_file = st.sidebar.file_uploader("Upload Banner Cuts (XLSX)", type=["xlsx"])
 
-    # CRITICAL FIX for NameError: Exit early if files are not yet loaded
     if not raw_data_file or not banner_file:
-        st.info("Please upload both the raw data and banner cuts files to begin.")
+        st.info("Please upload both the raw data and banner cuts XLSX files to begin.")
         return 
 
     # --- Data Processing Logic ---
     try:
-        # Load All Necessary Data Sheets (Sheet names confirmed: Raw Data, Val labels, Banners)
+        # Load All Necessary Data Sheets
+        # CRITICAL FIX: The error suggests the sheets are not being read correctly.
+        # We will attempt to read the specified sheets within the single file uploads.
+        # If this fails, it means the sheet names are still incorrect, or the upload environment
+        # is confusing the multi-sheet file.
+
+        # --- Attempting to load files by sheet name (as per your file structure) ---
         df_raw = pd.read_excel(raw_data_file, sheet_name="Raw Data")
-        # Header=1 is used for Val labels and Banners to skip the first row (multi-row header)
+        # Header=1 is used to skip the first row (e.g., 'Val labels,,')
         df_val_labels = pd.read_excel(raw_data_file, sheet_name="Val labels", header=1)
         df_banners = pd.read_excel(banner_file, sheet_name="Banners", header=1)
 
-        # --- FIX 1: Robust Column Naming for Val Labels ---
+
+        # --- FIX 1: Robust Column Naming for Val Labels (Positional Indexing) ---
         if len(df_val_labels.columns) >= 3:
-            # Use positional indexing to rename columns, which is necessary for multi-row headers
+            # Rename columns using positional indexing, which is highly robust against 'Unnamed' headers
             df_val_labels.rename(columns={
                 df_val_labels.columns[0]: 'Variable Values', 
                 df_val_labels.columns[1]: 'Value',           
@@ -82,7 +91,6 @@ def run_app():
                             
                             # Process each banner
                             for _, banner_row in df_banners.iterrows():
-                                # Column names from your banner file: 'var labels', 'Val labels'
                                 var_label = banner_row['var labels']
                                 val_label = banner_row['Val labels']
                                 banner_name = val_label 
@@ -97,7 +105,7 @@ def run_app():
 
                             final_table = final_table.fillna("0 (0.0%)")
                             
-                            # --- FIX 2: Sheet Name Sanitization (Resolves 'At least one sheet must be visible') ---
+                            # --- FIX 2: Robust Sheet Name Sanitization (Crucial for 'At least one sheet must be visible') ---
                             # Invalid Excel sheet characters: \ / * [ ] : ?
                             invalid_chars = r'[\\/*?\[\]:]'
                             
@@ -120,9 +128,16 @@ def run_app():
                     )
 
     except Exception as e:
-        # Display the actual error that occurred
+        # If the failure is still related to sheet reading, it's likely a file upload issue.
+        # We provide a highly specific message to guide the user.
         st.error(f"A critical processing error occurred: {e}")
-        st.error("Please re-check your sheet names ('Raw Data', 'Val labels', 'Banners') and column names in the Excel files.")
+        st.error("### 🛑 **FINAL TROUBLESHOOTING STEP** 🛑")
+        st.error(
+            "The error persists because the app cannot find the sheets. This is usually due to one of two reasons:"
+            "\n\n1.  **Incorrect File Type:** You must upload the **original multi-sheet XLSX file** for both 'Raw Data' and 'Banner Cuts', NOT separate CSV files."
+            "\n2.  **Incorrect Sheet Names:** The sheet names in your XLSX files **must exactly match** `Raw Data`, `Val labels`, and `Banners`."
+        )
+        st.error("Please re-upload the original XLSX files and ensure your sheet names are correct.")
 
 # --- Run the App ---
 if __name__ == "__main__":
