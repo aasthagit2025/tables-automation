@@ -24,9 +24,20 @@ def run_app():
         try:
             # --- Load All Necessary Data Sheets ---
             df_raw = pd.read_excel(raw_data_file, sheet_name="Raw Data")
-            df_val_labels = pd.read_excel(raw_data_file, sheet_name="Val labels", header=1) # Skip first row
-            df_banners = pd.read_excel(banner_file, sheet_name="Banners", header=1) # Skip first row
+            # header=1 correctly skips the first header row
+            df_val_labels = pd.read_excel(raw_data_file, sheet_name="Val labels", header=1)
+            df_banners = pd.read_excel(banner_file, sheet_name="Banners", header=1)
 
+            # --- FIX: Ensure Correct Column Names for Val Labels ---
+            # Explicitly rename the columns to what the script expects ('Variable Values', 'Value', 'Label')
+            # This is necessary because the header in the Excel sheet spans two rows.
+            if len(df_val_labels.columns) >= 3:
+                df_val_labels.columns = ['Variable Values', 'Value', 'Label']
+            else:
+                st.error("The 'Val labels' sheet does not have the expected 3 columns. Check your file structure.")
+                return # Stop execution if column count is wrong
+            # --------------------------------------------------------
+            
             # --- Data Pre-processing: Apply Value Labels to Raw Data ---
             df_labeled = df_raw.copy()
             
@@ -34,10 +45,12 @@ def run_app():
             df_val_labels['Variable Values'] = df_val_labels['Variable Values'].ffill()
 
             for var_name in df_val_labels['Variable Values'].unique():
+                # Check if the variable exists in the raw data before trying to map
                 if var_name in df_labeled.columns:
                     # Create a mapping dictionary for the current variable
                     mapping = df_val_labels[df_val_labels['Variable Values'] == var_name].set_index('Value')['Label'].to_dict()
                     # Apply the mapping to the raw data
+                    # fillna(df_raw[var_name]) ensures any unmapped values (like NaNs) remain as they were
                     df_labeled[var_name] = df_raw[var_name].map(mapping).fillna(df_raw[var_name])
 
             st.sidebar.header("2. Select Questions")
@@ -69,8 +82,9 @@ def run_app():
                                     val_label = banner_row['Val labels']
                                     banner_name = val_label # Use the value label as the banner name
                                     
-                                    if pd.notna(var_label) and pd.notna(val_label):
+                                    if pd.notna(var_label) and pd.notna(val_label) and var_label in df_labeled.columns:
                                         # Filter the labeled data to get the subgroup for this banner
+                                        # Only include records where the banner variable is equal to the banner value
                                         subgroup_data = df_labeled[df_labeled[var_label] == val_label]
                                         
                                         banner_counts = subgroup_data[question].value_counts()
@@ -80,7 +94,8 @@ def run_app():
                                         final_table[banner_name] = banner_counts.apply(lambda x: format_cell(x, banner_total))
 
                                 final_table = final_table.fillna("0 (0.0%)")
-                                sheet_name = question.replace(':', '').replace('?', '')[:31]
+                                # Create a valid sheet name (max 31 chars)
+                                sheet_name = question.replace(':', '').replace('?', '').replace('/', '')[:31]
                                 final_table.to_excel(writer, sheet_name=sheet_name)
 
                         st.success("✅ Success! Your tables are ready.")
