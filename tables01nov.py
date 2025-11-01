@@ -1,10 +1,10 @@
 """
-Streamlit Tabulation Automation — v2.1 (Total-only Wincross Format)
+Streamlit Tabulation Automation — v2.2 (Value Label Fix)
 - Reads SPSS (.sav), Excel, or CSV
-- Uses SPSS variable labels as Question titles
-- Uses SPSS value labels as Stub texts
-- Outputs Total-only tables with Count & Percent
-- Formatted Excel export (blue header, merged title)
+- Question from SPSS variable label
+- Stub from SPSS value labels (text, not numeric)
+- Outputs Total-only tables (Count & Percent)
+- Formatted Excel (blue header, merged title)
 """
 
 import streamlit as st
@@ -16,26 +16,26 @@ import tempfile
 import xlsxwriter
 from typing import Dict, Tuple
 
-st.set_page_config(page_title="Tabulation Automation v2.1", layout="wide")
+st.set_page_config(page_title="Tabulation Automation v2.2", layout="wide")
 
 # -------------------------
-# Configuration
+# Config
 # -------------------------
 DEFAULT_DK_CODES = {88, 99, -1, 98}
 BLUE_HEADER = "#0070C0"
 
 # -------------------------
-# File Reader (robust for Streamlit Cloud)
+# File Reader (universal fix)
 # -------------------------
 def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
     """
-    Reads uploaded dataset (.sav, .csv, .xlsx).
-    Uses temporary file method for SPSS (pyreadstat compatibility on Streamlit Cloud).
+    Reads uploaded dataset (.sav, .csv, .xlsx)
+    Handles SPSS via temp file (safe for Streamlit Cloud).
     """
     name = uploaded_file.name.lower()
 
     if name.endswith(".sav"):
-        # Save temporarily to disk
+        # Save to temp path
         with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
             tmp.write(uploaded_file.getbuffer())
             tmp_path = tmp.name
@@ -59,12 +59,11 @@ def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
     else:
         raise ValueError("Unsupported file type. Use .sav, .csv, or .xlsx")
 
-
 # -------------------------
 # Helper Functions
 # -------------------------
 def clean_title(text: str) -> str:
-    """Clean variable label text for titles."""
+    """Clean RI text like 'Please select one' from variable labels."""
     if not isinstance(text, str) or not text.strip():
         return ""
     ri_phrases = ["please select one", "select one", "tick one", "choose one", "please select"]
@@ -78,11 +77,11 @@ def get_label_for_variable(varname: str, meta: dict) -> str:
     return clean_title(vlabels.get(varname, varname))
 
 def value_label_map_for_var(varname: str, meta: dict) -> Dict:
-    """Get SPSS value labels for given variable."""
-    vmap = meta.get("value_labels", {})
-    if varname in vmap:
-        return vmap[varname]
-    for k, mm in vmap.items():
+    """Return dictionary of {code: label} for given SPSS variable."""
+    all_maps = meta.get("value_labels", {})
+    if varname in all_maps:
+        return all_maps[varname]
+    for k, mm in all_maps.items():
         if k.lower() == varname.lower():
             return mm
     return {}
@@ -99,27 +98,27 @@ def exclude_dk(series: pd.Series, dk_codes:set):
     return mask
 
 def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=0, value_labels:dict=None) -> pd.DataFrame:
-    """Return Count & % table for a variable."""
+    """Return Count & % table for one variable, mapping value labels."""
     s = series[base_mask]
     counts = s.value_counts(dropna=False, sort=False)
     total = counts.sum()
     pct = (counts / total * 100).round(decimals)
     df = pd.DataFrame({"Count": counts.astype(int), "Percent": pct})
 
+    # Replace numeric codes with text labels from SPSS
     def label_idx(val):
         if pd.isna(val):
             return "<No Answer>"
         if value_labels:
             try:
-                k = int(val)
-                return value_labels.get(k, val)
+                v_int = int(val)
+                return value_labels.get(v_int, val)
             except Exception:
-                return value_labels.get(str(val), val) if str(val) in value_labels else val
+                return value_labels.get(str(val), val)
         return val
 
     df.index = [label_idx(i) for i in df.index]
     return df
-
 
 # -------------------------
 # Table Generator
@@ -133,11 +132,11 @@ def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[st
         series = df[v]
         base_mask = exclude_dk(series, dk_codes)
         vmap = value_label_map_for_var(v, meta)
-        vlabel = get_label_for_variable(v, meta)
+        qtext = get_label_for_variable(v, meta)
 
         table = compute_count_pct(series, base_mask, decimals, vmap)
         df_tab = table.reset_index().rename(columns={"index": "Stub"})
-        df_tab.insert(0, "Question", vlabel)
+        df_tab.insert(0, "Question", qtext)
         worksheets[v] = df_tab
 
     # Index sheet
@@ -147,18 +146,13 @@ def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[st
     worksheets["INDEX"] = index_df
     return worksheets
 
-
 # -------------------------
-# Excel Export (formatted)
+# Excel Export (Wincross-style)
 # -------------------------
 def write_workbook(worksheets: Dict[str, pd.DataFrame]) -> bytes:
-    """
-    Write formatted Excel workbook (Total-only Wincross-style).
-    """
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
         workbook = writer.book
-        # formats
         title_fmt = workbook.add_format({
             "bold": True, "font_name": "Calibri", "font_size": 11,
             "align": "left", "valign": "vcenter"
@@ -182,10 +176,10 @@ def write_workbook(worksheets: Dict[str, pd.DataFrame]) -> bytes:
             ncols = len(df.columns)
             ws.merge_range(0, 0, 0, ncols - 1, sheet_name, title_fmt)
 
-            # Format headers and columns
+            # Apply header format
             for i, col in enumerate(df.columns):
                 ws.write(1, i, col, header_fmt)
-                ws.set_column(i, i, 20, cell_fmt)
+                ws.set_column(i, i, 22, cell_fmt)
 
             ws.freeze_panes(2, 1)
             ws.hide_gridlines(2)
@@ -193,12 +187,11 @@ def write_workbook(worksheets: Dict[str, pd.DataFrame]) -> bytes:
     out.seek(0)
     return out.read()
 
-
 # -------------------------
 # Streamlit UI
 # -------------------------
-st.title("Tabulation Automation — v2.1 (Wincross-style Total Tables)")
-st.markdown("Upload a dataset (.sav, .csv, .xlsx) to auto-generate formatted Total-only tables with Count & Percent.")
+st.title("Tabulation Automation — v2.2 (Total-only Wincross Style)")
+st.markdown("Uploads SPSS / CSV / Excel and produces formatted Total tables using variable & value labels.")
 
 # Sidebar
 st.sidebar.header("Settings")
@@ -220,7 +213,7 @@ if uploaded:
     st.dataframe(df.head(8))
 
     settings = {"dk_codes": dk_codes, "decimals": decimals}
-    with st.spinner("Generating Total-only tables..."):
+    with st.spinner("Generating Total tables..."):
         worksheets = generate_tabulation(df, meta, settings)
 
     st.success(f"Generated {len(worksheets)} sheets (including INDEX)")
@@ -228,7 +221,7 @@ if uploaded:
     st.subheader("Index of generated sheets")
     st.dataframe(worksheets.get("INDEX", pd.DataFrame()))
 
-    st.subheader("Preview of first few tables")
+    st.subheader("Preview tables")
     for k in list(worksheets.keys())[:preview_n]:
         st.markdown(f"**Sheet: {k}**")
         st.dataframe(worksheets[k].head(20))
@@ -243,4 +236,4 @@ if uploaded:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 else:
-    st.info("Please upload your .sav, .csv, or .xlsx data file to start.")
+    st.info("Please upload a .sav, .csv, or .xlsx file to start.")
