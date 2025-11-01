@@ -1,9 +1,13 @@
-streamlit
-pandas
-numpy
-pyreadstat
-openpyxl
-xlsxwriter
-scipy
-tqdm
-statsmodels
+# --- Streamlit Cloud Safe Build ---
+streamlit==1.38.0
+pandas==2.2.2
+numpy==1.26.4
+openpyxl==3.1.3
+xlsxwriter==3.2.0
+scipy==1.13.0
+tqdm==4.66.5
+statsmodels==0.14.2
+
+# pyreadstat sometimes fails to build from source on Streamlit Cloud.
+# Force install precompiled binary wheel from PyPI.
+pyreadstat==1.2.5 --only-binary=:all:
