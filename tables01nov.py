@@ -32,14 +32,19 @@ BANNER_SHADE_2 = "#E9E9E9"
 def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
     """
     Reads uploaded dataset (.sav, .csv, .xlsx).
-    Fixed for Streamlit's UploadedFile object using BytesIO conversion.
+    Final fix for Streamlit Cloud + pyreadstat compatibility.
     """
     name = uploaded_file.name.lower()
 
     if name.endswith(".sav"):
-        # ✅ Convert UploadedFile to BytesIO and read
-        file_bytes = io.BytesIO(uploaded_file.getbuffer())
-        df, meta = pyreadstat.read_sav(file_bytes, apply_value_formats=False)
+        # ✅ Save temporarily to disk (works universally)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
+            tmp.write(uploaded_file.getbuffer())
+            tmp_path = tmp.name
+
+        # read_sav works reliably with a temp file path
+        df, meta = pyreadstat.read_sav(tmp_path, apply_value_formats=False)
         meta_info = {
             "format": "sav",
             "variable_labels": getattr(meta, "variable_labels", {}),
