@@ -1,10 +1,10 @@
 """
-Streamlit Tabulation Automation v2 (SPSS .sav upload fix)
-- Uses SPSS variable labels & value labels (pyreadstat)
-- Implements Top2/Bottom2 & NPS logic per Tabulation Standards
-- Exports formatted Excel workbook (blue header, merged title, freeze panes, Total in col B)
-- Fixed SAV upload error (expected str, bytes or os.PathLike, not BytesIO)
-Reference: Tabulation Standards & Guidelines_v1
+Streamlit Tabulation Automation v2 (Final SAV Fix)
+- Reads .sav, .csv, .xlsx correctly
+- Uses SPSS variable/value labels (via pyreadstat)
+- Implements Top2/Bottom2 & NPS logic
+- Exports formatted Excel workbook (blue header, merged title, freeze panes)
+- Fully compatible with Streamlit Cloud (Python 3.12)
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Tuple
 st.set_page_config(page_title="Tabulation Automation v2", layout="wide")
 
 # -------------------------
-# Utilities & Config
+# Configuration
 # -------------------------
 DEFAULT_DK_CODES = {88, 99, -1, 98}
 BLUE_HEADER = "#0070C0"
@@ -27,18 +27,19 @@ BANNER_SHADE_1 = "#D3D3D3"
 BANNER_SHADE_2 = "#E9E9E9"
 
 # -------------------------
-# Fixed file reader
+# File reader (FINAL FIX)
 # -------------------------
 def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
     """
     Reads uploaded dataset (.sav, .csv, .xlsx).
-    Fixed: Streamlit already provides BytesIO object — no need to wrap it again.
+    Fixed for Streamlit's UploadedFile object using BytesIO conversion.
     """
     name = uploaded_file.name.lower()
 
     if name.endswith(".sav"):
-        # ✅ Fixed: pass the file directly to pyreadstat
-        df, meta = pyreadstat.read_sav(uploaded_file, apply_value_formats=False)
+        # ✅ Convert UploadedFile to BytesIO and read
+        file_bytes = io.BytesIO(uploaded_file.getbuffer())
+        df, meta = pyreadstat.read_sav(file_bytes, apply_value_formats=False)
         meta_info = {
             "format": "sav",
             "variable_labels": getattr(meta, "variable_labels", {}),
@@ -61,24 +62,21 @@ def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
 # Helper functions
 # -------------------------
 def clean_title(text: str) -> str:
-    """Clean variable label to use as table title; remove RI phrases like 'Please select one'."""
+    """Cleans question text for table titles (removes RI phrases)."""
     if not isinstance(text, str) or not text.strip():
         return ""
     ri_phrases = ["please select one", "select one", "tick one", "choose one", "please select"]
     txt = text.strip()
-    lower = txt.lower()
     for p in ri_phrases:
-        if p in lower:
-            idx = lower.find(p)
-            txt = (txt[:idx] + txt[idx+len(p):]).strip(" :;,-")
-            lower = txt.lower()
-    return txt
+        if p in txt.lower():
+            txt = txt.lower().replace(p, "")
+    return txt.strip(" :;,-")
 
 def get_label_for_variable(varname: str, meta: dict) -> str:
     vlabels = meta.get("variable_labels", {})
     return clean_title(vlabels.get(varname, varname))
 
-def value_label_map_for_var(varname: str, meta: dict) -> Dict[Any,str]:
+def value_label_map_for_var(varname: str, meta: dict) -> Dict[Any, str]:
     vmap = meta.get("value_labels", {})
     if varname in vmap:
         return vmap[varname]
@@ -99,14 +97,14 @@ def exclude_dk(series: pd.Series, dk_codes:set):
         mask = ~series.isin(dk_codes)
     else:
         try:
-            conv = pd.to_numeric(series, errors='coerce')
+            conv = pd.to_numeric(series, errors="coerce")
             mask = ~conv.isin(dk_codes)
         except Exception:
             mask = pd.Series(True, index=series.index)
     return mask
 
 # -------------------------
-# Tabulation logic
+# Tabulation Logic
 # -------------------------
 def detect_question_type(series: pd.Series, varname: str, meta: dict) -> str:
     s = series.dropna()
@@ -141,6 +139,7 @@ def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=0, v
             except Exception:
                 return value_labels.get(str(val), val) if str(val) in value_labels else val
         return val
+
     df.index = [label_idx(i) for i in df.index]
     return df
 
@@ -152,16 +151,25 @@ def compute_rating_summary(series: pd.Series, base_mask: pd.Series, scale_min:in
     if scale_min is None: scale_min = int(s.min())
     if scale_max is None: scale_max = int(s.max())
     width = scale_max - scale_min + 1
+
     def net_count(top_n:int):
         top_cut = scale_max - top_n + 1
         return (s >= top_cut).sum(), (s <= (scale_min + top_n - 1)).sum()
+
     summary = {"Base": len(s), "Mean": round(mn,2), "Std": round(sd,2)}
+
     if width >= 5:
         t2,b2 = net_count(2)
-        summary.update({"Top2_Count":int(t2),"Top2_Pct":round(t2/len(s)*100,2),"Bottom2_Count":int(b2),"Bottom2_Pct":round(b2/len(s)*100,2)})
+        summary.update({
+            "Top2_Count":int(t2),"Top2_Pct":round(t2/len(s)*100,2),
+            "Bottom2_Count":int(b2),"Bottom2_Pct":round(b2/len(s)*100,2)
+        })
     if width >= 7:
         t3,b3 = net_count(3)
-        summary.update({"Top3_Count":int(t3),"Top3_Pct":round(t3/len(s)*100,2),"Bottom3_Count":int(b3),"Bottom3_Pct":round(b3/len(s)*100,2)})
+        summary.update({
+            "Top3_Count":int(t3),"Top3_Pct":round(t3/len(s)*100,2),
+            "Bottom3_Count":int(b3),"Bottom3_Pct":round(b3/len(s)*100,2)
+        })
     if scale_min == 0 and scale_max == 10:
         prom = ((s >= 9) & (s <= 10)).sum()
         passive = ((s >= 7) & (s <= 8)).sum()
@@ -171,14 +179,18 @@ def compute_rating_summary(series: pd.Series, base_mask: pd.Series, scale_min:in
     return summary
 
 # -------------------------
-# Excel export
+# Excel Export
 # -------------------------
-def write_workbook(worksheets: Dict[str, pd.DataFrame], filename="tabulation_v2.xlsx") -> bytes:
+def write_workbook(worksheets: Dict[str, pd.DataFrame]) -> bytes:
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
         workbook = writer.book
-        header_fmt = workbook.add_format({"bold":True,"font_name":"Calibri","font_size":10,"align":"center","valign":"vcenter","font_color":"white","bg_color":BLUE_HEADER})
+        header_fmt = workbook.add_format({
+            "bold":True,"font_name":"Calibri","font_size":10,
+            "align":"center","valign":"vcenter","font_color":"white","bg_color":BLUE_HEADER
+        })
         title_fmt = workbook.add_format({"bold":True,"font_name":"Calibri","font_size":11,"align":"left"})
+
         for sheet, df in worksheets.items():
             safe = sheet[:31]
             df.to_excel(writer, sheet_name=safe, index=False, startrow=1)
@@ -200,12 +212,9 @@ def write_workbook(worksheets: Dict[str, pd.DataFrame], filename="tabulation_v2.
 def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[str, pd.DataFrame]:
     dk_codes = set(settings.get("dk_codes", DEFAULT_DK_CODES))
     decimals = settings.get("decimals", 0)
-    worksheets = {}
-    index_rows = []
-    varnames = list(df.columns)
-    rating_summaries = []
+    worksheets, rating_summaries = {}, []
 
-    for v in varnames:
+    for v in df.columns:
         series = df[v]
         vlabel = get_label_for_variable(v, meta)
         vmap = value_label_map_for_var(v, meta)
@@ -214,8 +223,7 @@ def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[st
 
         if qtype == "rating":
             table = compute_count_pct(series, base_mask, decimals, value_labels=vmap)
-            df_tab = table.reset_index().rename(columns={"index":"Option"})
-            worksheets[v] = df_tab
+            worksheets[v] = table.reset_index().rename(columns={"index":"Option"})
             s = compute_rating_summary(series, base_mask)
             s["QuestionVar"], s["QuestionLabel"] = v, vlabel
             rating_summaries.append(s)
@@ -232,15 +240,13 @@ def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[st
         elif qtype == "text_open":
             top = series.dropna().astype(str).value_counts().head(100)
             pct = (top / top.sum() * 100).round(decimals)
-            df_tab = pd.DataFrame({"Response":top.index,"Count":top.values,"Percent":pct.values})
-            worksheets[v] = df_tab
+            worksheets[v] = pd.DataFrame({"Response":top.index,"Count":top.values,"Percent":pct.values})
         else:
-            df_tab = compute_count_pct(series, base_mask, decimals, vmap).reset_index().rename(columns={"index":"Option"})
-            worksheets[v] = df_tab
+            table = compute_count_pct(series, base_mask, decimals, value_labels=vmap)
+            worksheets[v] = table.reset_index().rename(columns={"index":"Option"})
 
     if rating_summaries:
-        rating_summary_df = pd.DataFrame(rating_summaries)
-        worksheets["Rating_Summary_TopBottom_NPS"] = rating_summary_df
+        worksheets["Rating_Summary_TopBottom_NPS"] = pd.DataFrame(rating_summaries)
 
     index_rows = [{"Sheet":k,"Rows":v.shape[0],"Cols":v.shape[1]} for k,v in worksheets.items()]
     worksheets["INDEX"] = pd.DataFrame(index_rows)
@@ -262,6 +268,7 @@ sig_level = st.sidebar.selectbox("Significance level (hook - for later)", option
 preview_n = st.sidebar.number_input("Preview tables (count)", min_value=1, max_value=20, value=3)
 
 uploaded = st.file_uploader("Upload data (.sav, .csv, .xlsx)", type=["sav","csv","xls","xlsx"])
+
 if uploaded:
     try:
         df, meta = read_file(uploaded)
@@ -289,6 +296,11 @@ if uploaded:
     if st.button("Export formatted Excel workbook"):
         with st.spinner("Writing Excel workbook..."):
             bytes_xl = write_workbook(worksheets)
-        st.download_button("Download workbook", data=bytes_xl, file_name="tabulation_v2_output.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button(
+            "Download workbook",
+            data=bytes_xl,
+            file_name="tabulation_v2_output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 else:
     st.info("Please upload your .sav, .csv, or .xlsx data file to start.")
