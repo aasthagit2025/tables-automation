@@ -1,4 +1,22 @@
-streamlit
-pandas
-pyreadstat
-openpyxl
+\# Core web app framework
+streamlit>=1.38.0
+
+# Data handling
+pandas>=2.2.2
+numpy>=1.26.4
+
+# SPSS reader
+pyreadstat>=1.2.5
+
+# Excel writing and formatting
+openpyxl>=3.1.3
+XlsxWriter>=3.2.0
+
+# Statistical tests
+scipy>=1.13.0
+
+# Optional extras for performance / dev
+tqdm>=4.66.5
+
+statsmodels>=0.14.2    # for advanced Z/t-tests
+openpyxl-styles>=0.5.1 # for more complex Excel styling (if needed)
