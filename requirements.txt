@@ -8,6 +8,3 @@ scipy==1.13.0
 tqdm==4.66.5
 statsmodels==0.14.2
 
-# pyreadstat sometimes fails to build from source on Streamlit Cloud.
-# Force install precompiled binary wheel from PyPI.
-pyreadstat==1.2.5 --only-binary=:all:
