@@ -1,12 +1,11 @@
 """
-Tabulation Automation v3.1 — Wincross-style Total Tables
---------------------------------------------------------
-✔ Reads SPSS (.sav), Excel, CSV
-✔ Uses variable labels (Question) & value labels (Stub)
-✔ Excludes DK/Ref codes
+Tabulation Automation v3.2 — Finalized Wincross Total Tables
+------------------------------------------------------------
+✔ Correctly maps SPSS value labels (numeric → label text)
+✔ Excludes non-survey/system variables (record, uuid, source, date)
+✔ Preview Review section before download
+✔ Wincross-style output (merged question header, blue header)
 ✔ Adds Mean, Top2/Bottom2, and NPS summaries
-✔ Toggle for showing % symbol
-✔ Exports formatted Excel workbook (merged header, blue headers)
 """
 
 import streamlit as st
@@ -18,25 +17,26 @@ import tempfile
 import xlsxwriter
 from typing import Dict, Tuple
 
-st.set_page_config(page_title="Tabulation Automation v3.1", layout="wide")
+st.set_page_config(page_title="Tabulation Automation v3.2", layout="wide")
 
 # --------------------------
 # Config
 # --------------------------
 DEFAULT_DK_CODES = {88, 99, -1, 98}
 BLUE_HEADER = "#0070C0"
+EXCLUDE_VARS = ["record", "uuid", "source", "date"]
 
 # --------------------------
 # File Reader
 # --------------------------
 def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
+    """Reads uploaded dataset and metadata (handles .sav, .csv, .xlsx)."""
     name = uploaded_file.name.lower()
 
     if name.endswith(".sav"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
             tmp.write(uploaded_file.getbuffer())
             tmp_path = tmp.name
-
         df, meta = pyreadstat.read_sav(tmp_path, apply_value_formats=False)
         meta_info = {
             "format": "sav",
@@ -44,15 +44,12 @@ def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
             "value_labels": getattr(meta, "value_labels", {})
         }
         return df, meta_info
-
     elif name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
         return df, {"format": "csv", "variable_labels": {}, "value_labels": {}}
-
     elif name.endswith((".xls", ".xlsx")):
         df = pd.read_excel(uploaded_file)
         return df, {"format": "excel", "variable_labels": {}, "value_labels": {}}
-
     else:
         raise ValueError("Unsupported file type. Use .sav, .csv, or .xlsx")
 
@@ -60,31 +57,30 @@ def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
 # Helpers
 # --------------------------
 def clean_title(text: str) -> str:
+    """Clean 'please select one' etc."""
     if not isinstance(text, str) or not text.strip():
         return ""
-    remove_phrases = ["please select one", "select one", "tick one", "choose one", "please select"]
+    junk = ["please select one", "select one", "tick one", "choose one"]
     txt = text.strip()
-    for p in remove_phrases:
-        txt = txt.replace(p, "", 1) if p in txt.lower() else txt
+    for j in junk:
+        txt = txt.replace(j, "", 1) if j in txt.lower() else txt
     return txt.strip(" :;,-")
 
 def get_label_for_variable(varname: str, meta: dict) -> str:
-    vlabels = meta.get("variable_labels", {})
-    return clean_title(vlabels.get(varname, varname))
+    """Get question text from SPSS variable label."""
+    labels = meta.get("variable_labels", {})
+    return clean_title(labels.get(varname, varname))
 
 def value_label_map_for_var(varname: str, meta: dict) -> Dict:
-    """
-    Fetch value labels for the variable (case-insensitive).
-    """
+    """Return proper SPSS value labels (case-insensitive)."""
     all_maps = meta.get("value_labels", {})
-    if varname in all_maps:
-        return all_maps[varname]
-    for k, vmap in all_maps.items():
+    for k, mapping in all_maps.items():
         if k.strip().lower() == varname.strip().lower():
-            return vmap
+            return mapping
     return {}
 
 def exclude_dk(series: pd.Series, dk_codes:set):
+    """Exclude DK/Ref codes from base."""
     if pd.api.types.is_numeric_dtype(series):
         return ~series.isin(dk_codes)
     try:
@@ -94,31 +90,27 @@ def exclude_dk(series: pd.Series, dk_codes:set):
         return pd.Series(True, index=series.index)
 
 # --------------------------
-# Count / Percent Table
+# Count/Percent Logic
 # --------------------------
-def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=0,
+def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=1,
                       value_labels:dict=None, show_percent_sign:bool=False) -> pd.DataFrame:
+    """Generate Count/% table for a variable."""
     s = series[base_mask]
     counts = s.value_counts(dropna=False, sort=False)
     total = counts.sum()
     pct = (counts / total * 100).round(decimals)
+    df = pd.DataFrame({"Stub": counts.index, "Count": counts.values, "Percent": pct.values})
 
-    df = pd.DataFrame({
-        "Stub": counts.index,
-        "Count": counts.values,
-        "Percent": pct.values
-    })
-
-    def label_stub(val):
-        """Map numeric/string values to SPSS value labels reliably."""
+    # --- Improved value-label mapping ---
+    def map_label(val):
         if pd.isna(val):
             return "<No Answer>"
         if not value_labels:
             return val
-
+        # Convert value label keys to string for matching
         label_dict = {str(k).strip(): str(v).strip() for k, v in value_labels.items()}
-
         val_str = str(val).strip()
+        # Try exact match, int match, or lowercase fallback
         if val_str in label_dict:
             return label_dict[val_str]
         try:
@@ -132,13 +124,13 @@ def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=0,
                 return v
         return val
 
-    df["Stub"] = df["Stub"].apply(label_stub)
+    df["Stub"] = df["Stub"].apply(map_label)
     if show_percent_sign:
         df["Percent"] = df["Percent"].astype(str) + "%"
     return df
 
 # --------------------------
-# Rating / NPS Summary
+# Rating / NPS Summaries
 # --------------------------
 def rating_summary(series: pd.Series, base_mask: pd.Series) -> dict:
     s = pd.to_numeric(series[base_mask], errors="coerce").dropna()
@@ -168,18 +160,21 @@ def rating_summary(series: pd.Series, base_mask: pd.Series) -> dict:
 # --------------------------
 def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[str, pd.DataFrame]:
     dk_codes = set(settings.get("dk_codes", DEFAULT_DK_CODES))
-    decimals = settings.get("decimals", 0)
+    decimals = settings.get("decimals", 1)
     show_percent_sign = settings.get("show_percent_sign", False)
     worksheets, rating_summaries = {}, []
 
-    for v in df.columns:
+    # Filter columns: skip meta/system vars
+    varnames = [v for v in df.columns if v.lower() not in EXCLUDE_VARS]
+
+    for v in varnames:
         s = df[v]
         base_mask = exclude_dk(s, dk_codes)
         vmap = value_label_map_for_var(v, meta)
         qtext = get_label_for_variable(v, meta)
 
-        # Rating / NPS detection
-        if pd.api.types.is_numeric_dtype(s) and s.dropna().nunique() >= 3 and s.dropna().nunique() <= 11:
+        # Rating summary detection
+        if pd.api.types.is_numeric_dtype(s) and 3 <= s.dropna().nunique() <= 11:
             rating_summaries.append({
                 "Question": qtext,
                 **rating_summary(s, base_mask)
@@ -224,15 +219,14 @@ def write_workbook(worksheets: Dict[str, Tuple[str, pd.DataFrame]]) -> bytes:
                 ws.set_column(i, i, 20, cell_fmt)
             ws.freeze_panes(2, 1)
             ws.hide_gridlines(2)
-
     out.seek(0)
     return out.read()
 
 # --------------------------
 # Streamlit UI
 # --------------------------
-st.title("Tabulation Automation — v3.1 (Wincross Style)")
-st.markdown("Upload a dataset (.sav, .csv, .xlsx) to generate formatted Total tables with Mean/Top2/NPS summaries.")
+st.title("Tabulation Automation — v3.2 (Final Wincross Total Tables)")
+st.markdown("Upload a dataset (.sav, .csv, .xlsx) to generate formatted tables with SPSS value labels.")
 
 # Sidebar
 st.sidebar.header("Settings")
@@ -240,7 +234,7 @@ dk_text = st.sidebar.text_input("DK/Ref codes (comma separated)", value="88,99,-
 dk_codes = set(int(x.strip()) for x in dk_text.split(",") if x.strip().lstrip('-').isdigit())
 decimals = st.sidebar.number_input("Percent decimals", min_value=0, max_value=2, value=1)
 show_percent_sign = st.sidebar.checkbox("Show % symbol in Percent column", value=True)
-preview_n = st.sidebar.number_input("Preview tables", min_value=1, max_value=20, value=3)
+preview_n = st.sidebar.number_input("Number of tables to preview", min_value=1, max_value=20, value=5)
 
 uploaded = st.file_uploader("Upload data (.sav, .csv, .xlsx)", type=["sav","csv","xls","xlsx"])
 
@@ -263,20 +257,24 @@ if uploaded:
     with st.spinner("Generating tables..."):
         worksheets = generate_tabulation(df, meta, settings)
 
-    st.success(f"Generated {len(worksheets)} sheets (includes summaries)")
+    st.success(f"Generated {len(worksheets)} sheets (excluding meta variables)")
+
+    # --- Review Section ---
+    st.subheader("🔍 Review Generated Tables (Preview before download)")
     for i, (sheet, (qtext, df_tab)) in enumerate(worksheets.items()):
-        if i >= preview_n: break
-        st.subheader(f"Sheet: {sheet}")
-        st.markdown(f"**{qtext}**")
+        if i >= preview_n:
+            break
+        st.markdown(f"### {i+1}. {qtext}")
         st.dataframe(df_tab.head(20))
 
+    # --- Download Section ---
     if st.button("Export formatted Excel workbook"):
         with st.spinner("Exporting Excel..."):
             excel_bytes = write_workbook(worksheets)
         st.download_button(
-            "Download workbook",
+            "Download Excel",
             data=excel_bytes,
-            file_name="tabulation_total_tables_final.xlsx",
+            file_name="tabulation_total_tables_v3_2.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 else:
