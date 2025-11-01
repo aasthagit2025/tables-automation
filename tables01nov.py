@@ -30,28 +30,39 @@ EXCLUDE_VARS = ["record", "uuid", "source", "date"]
 # File Reader
 # --------------------------
 def read_file(uploaded_file) -> Tuple[pd.DataFrame, dict]:
-    """Reads uploaded dataset and metadata (handles .sav, .csv, .xlsx)."""
+    """Reads uploaded dataset and ensures SPSS labels are applied."""
     name = uploaded_file.name.lower()
 
     if name.endswith(".sav"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
             tmp.write(uploaded_file.getbuffer())
             tmp_path = tmp.name
-        df, meta = pyreadstat.read_sav(tmp_path, apply_value_formats=False)
+
+        # Read once with labels applied (SPSS-style display)
+        df, meta = pyreadstat.read_sav(tmp_path, apply_value_formats=True)
+
+        # Backup: raw with numeric codes (for rating detection etc.)
+        df_raw, meta_raw = pyreadstat.read_sav(tmp_path, apply_value_formats=False)
+
         meta_info = {
             "format": "sav",
-            "variable_labels": getattr(meta, "variable_labels", {}),
-            "value_labels": getattr(meta, "value_labels", {})
+            "variable_labels": getattr(meta_raw, "variable_labels", {}),
+            "value_labels": getattr(meta_raw, "value_labels", {}),
+            "raw_df": df_raw  # keep raw numeric copy
         }
         return df, meta_info
+
     elif name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
-        return df, {"format": "csv", "variable_labels": {}, "value_labels": {}}
+        return df, {"format": "csv", "variable_labels": {}, "value_labels": {}, "raw_df": df.copy()}
+
     elif name.endswith((".xls", ".xlsx")):
         df = pd.read_excel(uploaded_file)
-        return df, {"format": "excel", "variable_labels": {}, "value_labels": {}}
+        return df, {"format": "excel", "variable_labels": {}, "value_labels": {}, "raw_df": df.copy()}
+
     else:
         raise ValueError("Unsupported file type. Use .sav, .csv, or .xlsx")
+
 
 # --------------------------
 # Helpers
@@ -94,12 +105,18 @@ def exclude_dk(series: pd.Series, dk_codes:set):
 # --------------------------
 def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=1,
                       value_labels:dict=None, show_percent_sign:bool=False) -> pd.DataFrame:
-    """Generate Count/% table for a variable."""
+    """Generate Count/% table (labels handled automatically)."""
     s = series[base_mask]
     counts = s.value_counts(dropna=False, sort=False)
     total = counts.sum()
     pct = (counts / total * 100).round(decimals)
+
+    # Stub labels already applied via apply_value_formats=True
     df = pd.DataFrame({"Stub": counts.index, "Count": counts.values, "Percent": pct.values})
+
+    if show_percent_sign:
+        df["Percent"] = df["Percent"].astype(str) + "%"
+    return df
 
     # --- Improved value-label mapping ---
     def map_label(val):
