@@ -1,13 +1,12 @@
 """
-Tabulation Automation v3 — Wincross-style Total Tables
-------------------------------------------------------
-Features:
-- Reads SPSS (.sav), Excel, CSV
-- Uses variable labels (Question) & value labels (Stub)
-- Excludes DK/Ref codes
-- Adds Mean, Top2/Bottom2, NPS summaries
-- Toggle for showing % symbol
-- Exports formatted Excel workbook (merged header)
+Tabulation Automation v3.1 — Wincross-style Total Tables
+--------------------------------------------------------
+✔ Reads SPSS (.sav), Excel, CSV
+✔ Uses variable labels (Question) & value labels (Stub)
+✔ Excludes DK/Ref codes
+✔ Adds Mean, Top2/Bottom2, and NPS summaries
+✔ Toggle for showing % symbol
+✔ Exports formatted Excel workbook (merged header, blue headers)
 """
 
 import streamlit as st
@@ -19,7 +18,7 @@ import tempfile
 import xlsxwriter
 from typing import Dict, Tuple
 
-st.set_page_config(page_title="Tabulation Automation v3", layout="wide")
+st.set_page_config(page_title="Tabulation Automation v3.1", layout="wide")
 
 # --------------------------
 # Config
@@ -74,12 +73,15 @@ def get_label_for_variable(varname: str, meta: dict) -> str:
     return clean_title(vlabels.get(varname, varname))
 
 def value_label_map_for_var(varname: str, meta: dict) -> Dict:
+    """
+    Fetch value labels for the variable (case-insensitive).
+    """
     all_maps = meta.get("value_labels", {})
     if varname in all_maps:
         return all_maps[varname]
-    for k, mm in all_maps.items():
-        if k.lower() == varname.lower():
-            return mm
+    for k, vmap in all_maps.items():
+        if k.strip().lower() == varname.strip().lower():
+            return vmap
     return {}
 
 def exclude_dk(series: pd.Series, dk_codes:set):
@@ -92,7 +94,7 @@ def exclude_dk(series: pd.Series, dk_codes:set):
         return pd.Series(True, index=series.index)
 
 # --------------------------
-# Count/Percent Table
+# Count / Percent Table
 # --------------------------
 def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=0,
                       value_labels:dict=None, show_percent_sign:bool=False) -> pd.DataFrame:
@@ -108,20 +110,26 @@ def compute_count_pct(series: pd.Series, base_mask: pd.Series, decimals:int=0,
     })
 
     def label_stub(val):
-        if pd.isna(val): return "<No Answer>"
-        if not value_labels: return val
+        """Map numeric/string values to SPSS value labels reliably."""
+        if pd.isna(val):
+            return "<No Answer>"
+        if not value_labels:
+            return val
+
+        label_dict = {str(k).strip(): str(v).strip() for k, v in value_labels.items()}
+
+        val_str = str(val).strip()
+        if val_str in label_dict:
+            return label_dict[val_str]
         try:
-            val_num = int(float(val))
-            if val_num in value_labels:
-                return value_labels[val_num]
+            val_int = str(int(float(val)))
+            if val_int in label_dict:
+                return label_dict[val_int]
         except Exception:
             pass
-        val_str = str(val).strip()
-        if val_str in value_labels:
-            return value_labels[val_str]
-        for k, lbl in value_labels.items():
-            if str(k).strip().lower() == val_str.lower():
-                return lbl
+        for k, v in label_dict.items():
+            if k.lower() == val_str.lower():
+                return v
         return val
 
     df["Stub"] = df["Stub"].apply(label_stub)
@@ -170,6 +178,7 @@ def generate_tabulation(df: pd.DataFrame, meta: dict, settings: dict) -> Dict[st
         vmap = value_label_map_for_var(v, meta)
         qtext = get_label_for_variable(v, meta)
 
+        # Rating / NPS detection
         if pd.api.types.is_numeric_dtype(s) and s.dropna().nunique() >= 3 and s.dropna().nunique() <= 11:
             rating_summaries.append({
                 "Question": qtext,
@@ -209,7 +218,6 @@ def write_workbook(worksheets: Dict[str, Tuple[str, pd.DataFrame]]) -> bytes:
             df.to_excel(writer, sheet_name=safe, index=False, startrow=1)
             ws = writer.sheets[safe]
             ncols = len(df.columns)
-            # merged title row
             ws.merge_range(0, 0, 0, ncols - 1, qtext, title_fmt)
             for i, col in enumerate(df.columns):
                 ws.write(1, i, col, header_fmt)
@@ -223,14 +231,14 @@ def write_workbook(worksheets: Dict[str, Tuple[str, pd.DataFrame]]) -> bytes:
 # --------------------------
 # Streamlit UI
 # --------------------------
-st.title("Tabulation Automation — v3 (Wincross Style)")
-st.markdown("Upload your dataset (.sav, .csv, .xlsx) to generate formatted Total tables with Mean/Top2/NPS summaries.")
+st.title("Tabulation Automation — v3.1 (Wincross Style)")
+st.markdown("Upload a dataset (.sav, .csv, .xlsx) to generate formatted Total tables with Mean/Top2/NPS summaries.")
 
 # Sidebar
 st.sidebar.header("Settings")
 dk_text = st.sidebar.text_input("DK/Ref codes (comma separated)", value="88,99,-1,98")
 dk_codes = set(int(x.strip()) for x in dk_text.split(",") if x.strip().lstrip('-').isdigit())
-decimals = st.sidebar.number_input("Percent decimals", min_value=0, max_value=2, value=0)
+decimals = st.sidebar.number_input("Percent decimals", min_value=0, max_value=2, value=1)
 show_percent_sign = st.sidebar.checkbox("Show % symbol in Percent column", value=True)
 preview_n = st.sidebar.number_input("Preview tables", min_value=1, max_value=20, value=3)
 
@@ -268,7 +276,7 @@ if uploaded:
         st.download_button(
             "Download workbook",
             data=excel_bytes,
-            file_name="tabulation_total_tables_v3.xlsx",
+            file_name="tabulation_total_tables_final.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 else:
